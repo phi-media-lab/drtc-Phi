@@ -26,9 +26,9 @@
 
 J4012 是比赛现场必须重视的节点。即使最终大模型推理跑在外部机器，也应让 J4012 负责机器人闭环与主要部署入口。
 
-### 推理端 A：192.168.0.110 RTX 4070 服务器
+### 开发/训练端 A：192.168.0.110 RTX 4070 服务器
 
-当前本地模拟用主力推理服务器。
+当前本地开发用主力推理服务器，但不能带到比赛现场。
 
 已确认信息：
 
@@ -43,14 +43,16 @@ J4012 是比赛现场必须重视的节点。即使最终大模型推理跑在�
 
 - 先跑通 DRTC policy server。
 - 验证真实 policy 的 chunk 推理耗时。
-- 模拟比赛现场的外部/远端推理架构。
+- 模拟外部/远端推理架构，给现场方案提供性能上限和对照基线。
+- 赛前训练、离线 benchmark、调试 DRTC server/client。
 - 测量 observation 传输、action chunk 返回、latency estimator、cooldown、schedule starvation。
 
 注意：
 
+- 这台 RTX 4070 无法带到比赛场地，因此不能作为现场执行依赖。
 - RTX 4070 只能模拟 NVIDIA CUDA 软件生态和外部 policy server 角色。
 - RTX 4070 不能模拟 J4012 的实际边缘算力、Jetson ARM64 环境、JetPack/L4T 驱动、Orin NX 内存带宽、相机 I/O 或机器人端实时性。
-- 后续在 RTX 4070 上得到的真实模型 benchmark，只能证明“外部强算力 DRTC policy server 可行”，不能推出“J4012 本地可运行同等模型”。
+- 后续在 RTX 4070 上得到的真实模型 benchmark，只能证明“外部强算力 DRTC policy server 可行”和提供性能上限，不能推出“现场可直接使用同等算力”。
 
 ### 机器人端模拟：J4012-like client
 
@@ -87,9 +89,9 @@ J4012 是比赛现场必须重视的节点。即使最终大模型推理跑在�
   - JPEG quality 60
 - 这样测到的 RTT、payload encode/decode 成本、网络抖动才更接近 J4012 现场链路。
 
-### 推理端 B：AMD Ryzen AI 9 HX PRO 370
+### 现场推理端候选 B：AMD Ryzen AI 9 HX PRO 370
 
-备选/辅助推理节点，不作为唯一主链路押注。
+可带到比赛现场，因此从备选探索节点提升为现场 policy server 候选。
 
 已确认信息：
 
@@ -109,9 +111,10 @@ J4012 是比赛现场必须重视的节点。即使最终大模型推理跑在�
 
 定位：
 
-- 可以用于探索 AMD ROCm/iGPU/NPU 推理。
-- 可以作为备份 policy server。
-- 不应在没有真实 benchmark 前作为比赛唯一算力。
+- P0/P1 现场算力验证对象。
+- 如果 ACT benchmark 和 DRTC server smoke 通过，可作为比赛现场外部 policy server。
+- 如果 ROCm/PyTorch 不稳定，则降级为展示/探索节点，现场主流程必须回到 J4012 本地轻量方案和状态机/技能库。
+- 当前不应先押 SmolVLA；优先验证 ACT 和轻量视觉策略。
 
 ## DRTC 方案价值
 
@@ -320,25 +323,27 @@ J4012 本地运行简单检测和固定轨迹，外部 server 只做辅助识别
 
 ## 近期行动清单
 
-1. 在 192.168.0.110 上安装项目依赖、PyTorch CUDA，跑通 DRTC mock server。
-2. 在本地或 J4012 模拟端跑通 DRTC mock client。
-3. 建立 metrics 记录模板：RTT、latency_steps、schedule_size、starvation、chunk_gap。
-4. 给 AMD 机器安装 ROCm PyTorch，跑 `torch` smoke test。
-5. 对 RTX 4070 和 AMD 分别跑 policy chunk benchmark。
-6. 梳理 reBot B601 DM 的 action space、SDK、LeRobot 集成方式。
-7. 设计两道菜的最小可行流程和技能列表。
+1. 在 AMD 机器上安装/确认 ROCm PyTorch，跑 `torch` smoke test。
+2. 在 AMD 机器上跑 ACT `random-act` 和 SO101 ACT checkpoint benchmark。
+3. 如果 AMD ACT benchmark 可用，启动 AMD DRTC policy server，跑 J4012-like client -> AMD server 的 60 秒 smoke。
+4. 设计两道菜的最小可行流程和技能列表。
+5. 采集/准备一个比赛相关的 ACT 示教数据集，训练/微调一个稳定技能 checkpoint。
+6. 建立 metrics 记录模板：RTT、latency_steps、schedule_size、starvation、chunk_gap。
+7. 梳理 reBot B601 DM 的 action space、SDK、LeRobot 集成方式。
 8. 准备 GitHub README/PPT 框架，提前对齐评分项。
 
 ## 推荐优先级
 
 P0：
 
-- DRTC mock 链路跑通。
-- RTX 4070 policy 推理 benchmark。
-- J4012-like client 到 RTX 4070 server 的完整 mock 环路。
+- AMD ROCm/PyTorch smoke test。
+- AMD ACT policy benchmark。
+- J4012-like client 到 AMD server 的 DRTC smoke。
+- 两道菜最小技能链设计。
 
 P1：
 
+- 比赛相关 ACT 技能示教数据采集/训练。
 - 相机 observation 传输优化。
 - RTC in-painting 参数调试。
 - 故障注入实验。
@@ -347,16 +352,16 @@ P1：
 P2：
 
 - J4012/reBot 控制链路确认（待真机）。
-- AMD Ryzen AI 9 HX PRO 370 ROCm/PyTorch 推理验证。
+- RTX 4070 继续作为赛前训练/benchmark 对照。
 - NPU/ONNX/Vitis/Ryzen AI 软件栈探索。
 
 ## 当前结论
 
 DRTC + J4012 client + 外部 policy server 是符合比赛场景的架构。
 
-192.168.0.110 RTX 4070 服务器适合作为当前主力模拟推理端。
+192.168.0.110 RTX 4070 服务器适合作为赛前开发、训练和性能上限参考，但不能作为现场执行依赖。
 
-AMD Ryzen AI 9 HX PRO 370 可以探索，但在完成真实模型 benchmark 前，不应作为比赛唯一算力假设。
+AMD Ryzen AI 9 HX PRO 370 可以带到比赛现场，因此必须尽快完成 ACT/DRTC 最小验证；验证通过后可作为现场外部 policy server，验证失败则降级为展示/探索节点。
 
 比赛最终目标不是证明某个硬件概念，而是稳定完成烹饪、符合自主/半自主规则，并把 J4012、相机、DRTC、策略模型和工程完整度清楚展示出来。
 
@@ -916,16 +921,180 @@ ACT checkpoint 结论：
 - 但它证明了 ACT 路线在当前 DRTC + 4070 架构里有足够好的实时预算。
 - 比赛准备应优先把 ACT 用在可示教、可重复的烹饪技能上，而不是继续把主流程押给 SmolVLA。
 
+### 2026-04-24 现场算力约束更新
+
+新增约束：
+
+- `192.168.0.110` RTX 4070 无法带到比赛现场。
+- AMD Ryzen AI 9 HX PRO 370 机器可以带到比赛现场。
+
+影响：
+
+- RTX 4070 从“现场主力推理端候选”降级为“赛前开发/训练/benchmark 对照机器”。
+- AMD 从“P2 备机探索”提升为“P0/P1 现场 policy server 候选”。
+- 当前已经在 4070 上证明 ACT/DRTC 路线性能可行，但这只是上限参考；现场方案必须在 AMD 或 J4012 上复测。
+- SmolVLA 在 4070 上已经偏慢，短期不应优先迁移到 AMD；AMD 第一优先级是 ACT 和轻量视觉策略。
+
+新的现场候选架构：
+
+```text
+J4012 robot client
+  - 相机采集
+  - reBot 控制
+  - action schedule / cooldown / LWW / safety
+  - 状态机和本地 fallback
+
+AMD Ryzen AI 9 HX PRO 370 policy server
+  - ACT / 轻量 policy chunk 推理
+  - 可选低频视觉识别或策略辅助
+
+RTX 4070
+  - 赛前训练
+  - 离线 benchmark
+  - 作为性能上限和回归对照
+```
+
+AMD 最小验证计划：
+
+1. `torch`/ROCm smoke：
+   - `torch.__version__`
+   - ROCm/HIP version
+   - device name
+   - `torch.cuda.is_available()`
+   - CUDA-equivalent matmul smoke
+2. ACT benchmark：
+   - `random-act`
+   - `jliu6718/lerobot-so101-act`
+   - 先测单独 `predict_action_chunk`
+3. DRTC smoke：
+   - J4012-like client -> AMD server
+   - 2 路 `320x240`，20Hz，60 秒
+   - 若通过，再测 1 路 `front 640x480`
+4. 判定：
+   - 如果 ACT chunk 能稳定在 `50-150ms` 且 DRTC schedule 不清空，AMD 可作为现场 policy server。
+   - 如果 AMD ROCm 不稳定或 latency 过高，现场主流程转为 J4012 本地轻量检测 + 状态机/示教轨迹，AMD 只做展示/探索。
+
+AMD 验证结果：
+
+- 机器：`AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M`
+- ROCm：`7.2.1` 系统栈，`gfx1150`
+- PyTorch：`2.13.0.dev20260423+rocm7.1`
+- HIP：`7.1.52802`
+- `torch.cuda.is_available()`: `True`
+- device: `AMD Radeon 890M`
+- FP16 `2048x2048` matmul smoke: `42.74ms`
+
+AMD policy benchmark：
+
+- synthetic baseline, hidden 512, chunk 50: mean `0.12ms`
+- random ACT, 1 路 `640x480`, chunk 50: mean `34.67ms`, p99 `34.95ms`
+- `jliu6718/lerobot-so101-act`, chunk 50: mean `35.78ms`, p99 `36.59ms`, load `451ms`
+
+AMD DRTC smoke：
+
+- 拓扑：本地 Mac 模拟 J4012 client -> AMD policy server
+- server: `192.168.0.128:18082`
+- policy: `jliu6718/lerobot-so101-act`
+- 输入：1 路 `front 640x480`
+- 频率：`20Hz`
+- 时长：`60s`
+- received_chunks: `147`
+- executed_actions: `1157`
+- final_schedule_size: `47`
+- latency_steps: `4`
+- latency_ms: `173.11`
+- artifact: `artifacts/drtc_amd_real_act_so101_front_640x480_60s.json`
+
+AMD 2 路相机补测：
+
+- 尝试配置：2 路 `320x240`，camera names `front,wrist`
+- 结果：失败，未收到 action chunk，client schedule 一直为空。
+- server 错误：`KeyError: observation.images.wrist`
+- 判断：当前 `jliu6718/lerobot-so101-act` checkpoint 只声明 `observation.images.front`，真实 policy server 路径没有忽略额外相机输入。
+- 影响：不能用这个 checkpoint 直接验证 2 路相机链路。若要验证 2 路传输，需要：
+  - 使用 `random-act` 2-camera server。
+  - 或训练/构造声明 `front,wrist` 两路输入的 ACT checkpoint。
+  - 或在 DRTC server/preprocessor 层增加“只转发 policy config 需要的 observation key”的过滤。
+
+AMD 2 路传输/调度隔离验证：
+
+- server mode: `random-act`
+- 输入：2 路 `front,wrist 320x240`
+- 频率：`20Hz`
+- 时长：`60s`
+- received_chunks: `120`
+- executed_actions: `1146`
+- final_schedule_size: `47`
+- latency_steps: `4`
+- latency_ms: `154.45`
+- artifact: `artifacts/drtc_amd_random_act_2x320x240_60s.json`
+- 结论：AMD + 网络 + DRTC 调度在双相机小图下可跑通；当前双相机阻塞点不是链路，而是实际 checkpoint 的输入 schema。
+
+AMD 启动脚本：
+
+- AMD policy server: `scripts/start_amd_drtc_policy_server.sh`
+- 本地/J4012-like client smoke: `scripts/run_amd_drtc_client_smoke.sh`
+- client 脚本会清理 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY`，并把 policy server IP 注入 `NO_PROXY`，避免 gRPC 被本机代理劫持。
+- 默认 server 地址为 `192.168.0.128:18082`，现场需要按实际 AMD IP 覆盖 `POLICY_SERVER_ADDRESS`。
+- 脚本化 15 秒 smoke 已通过：
+  - server: `PORT=18085 ./scripts/start_amd_drtc_policy_server.sh`
+  - client: `POLICY_SERVER_ADDRESS=192.168.0.128:18085 DURATION_S=15 ./scripts/run_amd_drtc_client_smoke.sh`
+  - received_chunks: `29`
+  - executed_actions: `280`
+  - final_schedule_size: `46`
+  - latency_steps: `4`
+  - latency_ms: `173.12`
+  - artifact: `artifacts/drtc_amd_scripted_act_so101_front_640x480_15s.json`
+
+AMD 10 分钟长测：
+
+- 拓扑：本地 Mac 模拟 J4012 client -> AMD policy server
+- 命令路径：`scripts/start_amd_drtc_policy_server.sh` + `scripts/run_amd_drtc_client_smoke.sh`
+- server: `192.168.0.128:18086`
+- policy: `jliu6718/lerobot-so101-act`
+- 输入：1 路 `front 640x480`
+- 频率：`20Hz`
+- 时长：`600s`
+- received_chunks: `1549`
+- executed_actions: `11709`
+- final_schedule_size: `44`
+- latency_steps: `4`
+- latency_ms: `186.89`
+- artifact: `artifacts/drtc_amd_scripted_act_so101_front_640x480_10min.json`
+
+10 分钟长测观察：
+
+- 没有出现 schedule starvation，`schedule_size` 未归零。
+- 早期出现一次约 `2.3s` 的 diagnostic RTT max 尖峰，之后也有 `1.0-1.5s` 级别的偶发尖峰。
+- DRTC schedule 能吸收这些尖峰，`latency_steps` 在尖峰后会短时升到约 `10-18`，随后恢复到 `3-5`。
+- 中后段窗口更稳定，diagnostic max 多数回落到几百 ms，最终 `latency_steps=4`。
+- 当前结论：AMD 作为现场 ACT policy server 可继续推进；但比赛现场必须使用有线网络、固定 IP、关闭代理，并准备本地 fallback，避免 Wi-Fi/交换机抖动放大尖峰。
+
+AMD 结论：
+
+- AMD 已通过 P0 最小验证，可以作为现场 policy server 的主候选继续推进。
+- 单次 ACT 推理约 `36ms`，说明主要风险不在模型前向，而在完整链路的序列化、网络、调度和偶发尖峰。
+- 60 秒闭环没有 schedule starvation，最终 queue 仍有 `47` 个 action，基本满足 DRTC 可用性判断。
+- 运行中出现过 `total_latency_rtt_ms max ~= 2.3s` 的尖峰。
+- 10 分钟长测已确认尖峰不会清空 schedule，但仍会短时提高 latency/cooldown；真实机器人动作层需要限速、急停和本地状态机保护。
+- 本地 gRPC client 会受代理环境变量影响；现场运行脚本必须显式设置 `NO_PROXY=<policy_server_ip>,localhost,127.0.0.1`，或清空 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY`。
+- `amd` 是 SSH alias，不是可解析主机名；机器人端应使用局域网 IP 或现场 DNS/hosts 绑定。
+- PyTorch ROCm nightly wheel 下载体积约 `5.8GB`，且安装中发生过一次下载超时；现场前必须离线缓存 wheel、checkpoint 和 venv/conda 环境。
+
 当前架构判断更新：
 
-- 外部 RTX 4070 policy server 路线继续作为 P0 主线。
+- 现场主线候选改为 AMD policy server + J4012 robot client。
+- RTX 4070 继续作为赛前开发、训练和性能上限参考，不作为现场执行依赖。
 - 默认闭环输入继续建议 2 路 `320x240`，因为网络端到端更稳。
 - 2 路 `640x480` 的 policy 前向不是问题，但链路 latency 已经进入 `latency_steps=2`，只建议作为有线网络确认后的备选或高分辨率识别路径。
+- AMD 上 1 路 `640x480` 已可跑通，但最终 latency 约 `173ms`；现场主流程仍建议先按 1 路 `640x480` 或 2 路 `320x240` 取舍，不要一开始押 2 路 `640x480`。
+- 现有 SO101 ACT checkpoint 只能作为 1 路 `front` 闭环验证基准；比赛任务如果需要多视角，必须训练多相机 checkpoint 或在策略前做显式相机选择。
 
 下一步：
 
-- 准备完整离线依赖，必要时传 base VLM `model.safetensors` 后复测 `--load-vlm-weights`。
-- 测 ACT checkpoint 或轻量视觉策略，寻找 `<50ms/chunk` 的候选模型。
+- 决定 ACT 训练输入：优先 1 路 `front 640x480` 快速收敛；若比赛场景遮挡明显，再升级到 `front,wrist` 双相机 checkpoint。
+- 离线缓存 PyTorch ROCm wheel、torchvision wheel、checkpoint、pip wheelhouse，避免现场网络依赖。
+- 在 AMD 上做故障注入：latency spike、observation drop、action drop，验证 cooldown 和 fallback。
 - 采集/准备一个比赛相关的 ACT 示教数据集，优先选一个稳定技能训练 checkpoint。
-- 给真实 SmolVLA DRTC smoke 增加故障注入：action drop、observation drop、latency spike，验证 cooldown 和 schedule 恢复。
+- 等拿到 J4012 后，把本地 Mac client 替换为真实 J4012 client 复测同一套指标。
 - 给 `tools/drtc_mock_smoke.py` 继续增加更细的 CSV metrics 输出，后续能长期跑 10 分钟并记录 p50/p90/p99。
