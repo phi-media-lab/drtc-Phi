@@ -361,6 +361,10 @@ class RemotePolicyConfig:
     rtc_full_trajectory_alignment: bool = False  # Skip gradient for faster/smoother transitions
     # Denoising steps override (Alex Soare: Beta should scale with n)
     num_flow_matching_steps: int | None = None  # None = use policy default (e.g., 10 for PI0/SmolVLA)
+    # Optional local VLM/tokenizer overrides for offline policy servers.
+    vlm_model_name: str | None = None
+    load_vlm_weights: bool | None = None
+    no_act_pretrained_backbone_weights: bool = False
     # Spike injection (client-driven, for experiments)
     # List of dicts: [{"start_s": 5.0, "delay_ms": 2000}, ...]
     spikes: list[dict] = field(default_factory=list)
@@ -376,6 +380,9 @@ class RemotePolicyConfig:
         self.__dict__.setdefault("rtc_sigma_d", 1.0)
         self.__dict__.setdefault("rtc_full_trajectory_alignment", False)
         self.__dict__.setdefault("num_flow_matching_steps", None)  # Default to policy config
+        self.__dict__.setdefault("vlm_model_name", None)
+        self.__dict__.setdefault("load_vlm_weights", None)
+        self.__dict__.setdefault("no_act_pretrained_backbone_weights", False)
         # Spike injection defaults (new format)
         self.__dict__.setdefault("spikes", [])
 

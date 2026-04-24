@@ -1,0 +1,14 @@
+{
+  "camera_count": 2,
+  "camera_height": 240,
+  "camera_width": 320,
+  "duration_s": 60.0,
+  "executed_actions": 1178,
+  "final_action_step": 1177,
+  "final_schedule_size": 47,
+  "fps": 20,
+  "latency_ms": 82.23965408521856,
+  "latency_steps": 2,
+  "received_chunks": 154,
+  "server": "192.168.0.110:18080"
+}

@@ -15,6 +15,7 @@
 ### Environments & Dependencies ###
 .env
 .venv
+.venv-drtc/
 env/
 venv/
 env.bak/
@@ -166,6 +167,7 @@ wandb/
 # Data folders
 data/
 outputs/
+checkpoints/
 
 # Translations
 *.mo

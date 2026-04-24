@@ -65,6 +65,27 @@ class RobotClientDrtcConfig:
 
     # Device configuration (for policy inference on server)
     policy_device: str = field(default="cpu", metadata={"help": "Device for policy inference"})
+    policy_vlm_model_name: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional local VLM/tokenizer path override for policies such as SmolVLA. "
+            "Use this to run offline without accessing Hugging Face from the policy server."
+        },
+    )
+    policy_load_vlm_weights: bool | None = field(
+        default=None,
+        metadata={
+            "help": "Optional override for policies with a load_vlm_weights config field. "
+            "Set false to skip loading a separate base VLM checkpoint when fine-tuned weights are self-contained."
+        },
+    )
+    policy_no_act_pretrained_backbone_weights: bool = field(
+        default=False,
+        metadata={
+            "help": "Set ACT pretrained_backbone_weights to None on the policy server. "
+            "Useful for offline runs where torchvision cannot download ResNet weights."
+        },
+    )
 
     # Control frequency
     fps: int = field(default=DEFAULT_FPS, metadata={"help": "Control loop frequency in Hz"})

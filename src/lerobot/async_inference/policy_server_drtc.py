@@ -33,6 +33,7 @@ import draccus
 import grpc
 import torch
 
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.processor import (
     PolicyAction,
@@ -319,9 +320,32 @@ class PolicyServerDrtc(services_pb2_grpc.AsyncInferenceServicer):
 
         # Load policy
         policy_class = get_policy_class(self.policy_type)
+        policy_config = None
+        vlm_model_name = getattr(policy_specs, "vlm_model_name", None)
+        load_vlm_weights = getattr(policy_specs, "load_vlm_weights", None)
+        no_act_pretrained_backbone_weights = getattr(
+            policy_specs, "no_act_pretrained_backbone_weights", False
+        )
+        if vlm_model_name is not None or load_vlm_weights is not None or no_act_pretrained_backbone_weights:
+            policy_config = PreTrainedConfig.from_pretrained(policy_specs.pretrained_name_or_path)
+            if vlm_model_name is not None:
+                if not hasattr(policy_config, "vlm_model_name"):
+                    raise ValueError(f"vlm_model_name override is not supported by policy type {self.policy_type}")
+                policy_config.vlm_model_name = vlm_model_name
+            if load_vlm_weights is not None:
+                if not hasattr(policy_config, "load_vlm_weights"):
+                    raise ValueError(f"load_vlm_weights override is not supported by policy type {self.policy_type}")
+                policy_config.load_vlm_weights = load_vlm_weights
+            if no_act_pretrained_backbone_weights:
+                if not hasattr(policy_config, "pretrained_backbone_weights"):
+                    raise ValueError(
+                        "no_act_pretrained_backbone_weights override is not supported by "
+                        f"policy type {self.policy_type}"
+                    )
+                policy_config.pretrained_backbone_weights = None
 
         t_load_start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path, config=policy_config)
         t_load_done = time.perf_counter()
 
         t_to_start = time.perf_counter()
@@ -342,14 +366,17 @@ class PolicyServerDrtc(services_pb2_grpc.AsyncInferenceServicer):
 
         # Load preprocessor and postprocessor
         device_override = {"device": self.device}
+        preprocessor_overrides = {
+            "device_processor": device_override,
+            "rename_observations_processor": {"rename_map": policy_specs.rename_map},
+        }
+        if vlm_model_name is not None:
+            preprocessor_overrides["tokenizer_processor"] = {"tokenizer_name": vlm_model_name}
         t_pp_start = time.perf_counter()
         self.preprocessor, self.postprocessor = make_pre_post_processors(
             self.policy.config,
             pretrained_path=policy_specs.pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
-            },
+            preprocessor_overrides=preprocessor_overrides,
             postprocessor_overrides={"device_processor": device_override},
         )
         t_pp_done = time.perf_counter()
@@ -886,4 +913,3 @@ def serve_drtc(cfg: PolicyServerDrtcConfig) -> None:
 
 if __name__ == "__main__":
     serve_drtc()
-

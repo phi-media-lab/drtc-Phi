@@ -338,6 +338,9 @@ class RobotClientDrtc:
             rtc_sigma_d=config.rtc_sigma_d,
             rtc_full_trajectory_alignment=config.rtc_full_trajectory_alignment,
             num_flow_matching_steps=config.num_flow_matching_steps,
+            vlm_model_name=config.policy_vlm_model_name,
+            load_vlm_weights=config.policy_load_vlm_weights,
+            no_act_pretrained_backbone_weights=config.policy_no_act_pretrained_backbone_weights,
             spikes=config.spikes,
             diagnostics_verbose=config.metrics_diagnostic_verbose,
         )
