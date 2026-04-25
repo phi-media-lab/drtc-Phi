@@ -527,7 +527,19 @@ class PolicyServerDrtc(services_pb2_grpc.AsyncInferenceServicer):
             # State: derive dimensionality from lerobot_features
             if self.lerobot_features:
                 state_features = self.lerobot_features.get("observation.state", [])
-                state_dim = len(state_features) if isinstance(state_features, (list, tuple)) else 6
+                if isinstance(state_features, dict):
+                    shape = state_features.get("shape")
+                    names = state_features.get("names")
+                    if isinstance(shape, (list, tuple)) and len(shape) == 1:
+                        state_dim = int(shape[0])
+                    elif isinstance(names, (list, tuple)):
+                        state_dim = len(names)
+                    else:
+                        state_dim = 6
+                elif isinstance(state_features, (list, tuple)):
+                    state_dim = len(state_features)
+                else:
+                    state_dim = 6
             else:
                 state_dim = 6
             dummy_obs["observation.state"] = torch.zeros(1, state_dim)
@@ -886,4 +898,3 @@ def serve_drtc(cfg: PolicyServerDrtcConfig) -> None:
 
 if __name__ == "__main__":
     serve_drtc()
-

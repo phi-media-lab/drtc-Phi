@@ -11,13 +11,23 @@ reBot arm + cameras
   -> reComputer Jetson robot client
   -> DRTC/gRPC transport
   -> Aliyun L20 SmolVLA policy server
-  -> 50 x 6 action chunks
+  -> action chunks
   -> reComputer scheduler / adapter / safety
   -> reBot actuator commands
 ```
 
 The immediate target is not to prove that the current public SmolVLA checkpoint can solve the reBot task.
 The immediate target is to validate the full system path and expose the remaining embodiment/action-adapter work.
+
+After collecting the first reBot dataset, the model target is now clearer:
+
+```text
+current system baseline:
+  SO101 SmolVLA checkpoint -> 50 x 6 action chunks
+
+next reBot policy target:
+  seeed_b601_dm_follower dataset -> 50 x 7 reBot action chunks
+```
 
 ## Current Machines
 
@@ -92,6 +102,623 @@ Role:
 - Emits action chunks.
 
 ## Current Verified Results
+
+### reBot Native Dataset
+
+Dataset:
+
+```text
+https://huggingface.co/datasets/Lisette1231/20260425_flipbreadtopot1
+```
+
+Repository metadata:
+
+```text
+dataset id: Lisette1231/20260425_flipbreadtopot1
+sha: 358427cd9835a2aec63c576f4cff8f8f3cb23797
+last modified: 2026-04-25 07:20:09 UTC
+visibility: public, not gated
+storage: about 223 MB
+license tag: apache-2.0
+format tags: LeRobot, parquet, video, timeseries
+```
+
+Files observed:
+
+```text
+data/chunk-000/file-000.parquet
+meta/info.json
+meta/stats.json
+meta/tasks.parquet
+meta/episodes/chunk-000/file-000.parquet
+videos/observation.images.front/chunk-000/file-000.mp4
+videos/observation.images.wrist/chunk-000/file-000.mp4
+```
+
+LeRobot metadata:
+
+```text
+codebase_version: v3.0
+robot_type: seeed_b601_dm_follower
+episodes: 10
+frames: 3711
+fps: 30
+tasks: 1
+split: train 0:10
+task: flip the bread in the pot
+```
+
+Feature schema:
+
+```text
+observation.state:
+  dtype: float32
+  shape: [7]
+  names:
+    shoulder_pan.pos
+    shoulder_lift.pos
+    elbow_flex.pos
+    wrist_flex.pos
+    wrist_yaw.pos
+    wrist_roll.pos
+    gripper.pos
+
+action:
+  dtype: float32
+  shape: [7]
+  names:
+    shoulder_pan.pos
+    shoulder_lift.pos
+    elbow_flex.pos
+    wrist_flex.pos
+    wrist_yaw.pos
+    wrist_roll.pos
+    gripper.pos
+
+observation.images.front:
+  dtype: video
+  shape: [480, 640, 3]
+  codec: av1
+  fps: 30
+
+observation.images.wrist:
+  dtype: video
+  shape: [480, 640, 3]
+  codec: av1
+  fps: 30
+```
+
+Action ranges from `meta/stats.json`:
+
+```text
+min:
+  [-75.900002, -128.800003, -132.000000, -6.900000, -68.400002, -32.599998, -211.199997]
+
+max:
+  [7.500000, 1.000000, 1.000000, 90.000000, 18.000000, 8.100000, 0.000000]
+
+mean:
+  [-23.073085, -62.618144, -60.841318, 42.934629, -18.021124, -7.354488, -69.075021]
+
+std:
+  [21.721202, 52.807847, 47.422979, 32.395199, 22.913585, 7.788056, 64.077581]
+```
+
+Implications:
+
+- This is the first usable reBot-native policy dataset in the current workflow.
+- It matches the physical arm family: `seeed_b601_dm_follower`.
+- It confirms the real robot action/state interface is 7D, not the current SO101 checkpoint's 6D interface.
+- It confirms the real image keys should be `observation.images.front` and `observation.images.wrist`, not `camera1` and `camera2`.
+- It is too small to claim robust task generalization, but sufficient for an overfit/smoke-test policy and full DRTC integration test.
+- `complementary_info.policy_action` is all zeros in the observed stats, so the supervised learning target should remain `action`.
+
+This changes the model plan:
+
+```text
+SO101 checkpoint:
+  keep for transport/server validation only
+
+Lisette1231/20260425_flipbreadtopot1:
+  use as the reBot-native training/evaluation baseline
+```
+
+### reBot SmolVLA Training Result
+
+Training host:
+
+```text
+Aliyun L20
+repo: /root/work/drtc-Phi
+env: /root/work/drtc-Phi/.venv
+```
+
+Important environment note:
+
+- Default LeRobot video backend selected `torchcodec`.
+- `torchcodec` failed because system FFmpeg shared libraries were unavailable.
+- The working path is to force the dataset backend to `pyav`:
+
+```bash
+--dataset.video_backend=pyav
+```
+
+Do not fine-tune directly from `lerobot/smolvla_base` with `--policy.path`.
+That checkpoint config contains SO101-style features:
+
+```text
+observation.images.camera1/camera2/camera3
+observation.state: 6D
+action: 6D
+```
+
+For this reBot dataset, use a dataset-driven SmolVLA config instead:
+
+```bash
+--policy.type=smolvla
+--policy.load_vlm_weights=true
+```
+
+Smoke test command:
+
+```bash
+cd /root/work/drtc-Phi
+source .venv/bin/activate
+CUDA_VISIBLE_DEVICES=0 lerobot-train \
+  --policy.type=smolvla \
+  --policy.load_vlm_weights=true \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=Lisette1231/20260425_flipbreadtopot1 \
+  --dataset.video_backend=pyav \
+  --batch_size=2 \
+  --steps=20 \
+  --eval_freq=0 \
+  --save_freq=20 \
+  --log_freq=1 \
+  --num_workers=2 \
+  --wandb.enable=false \
+  --output_dir=outputs/train/rebot_smolvla_flipbread_smoke_20260425_20steps
+```
+
+Smoke result:
+
+```text
+status: completed
+checkpoint: outputs/train/rebot_smolvla_flipbread_smoke_20260425_20steps/checkpoints/000020/pretrained_model
+dataset frames: 3711
+dataset episodes: 10
+effective batch size: 2
+learnable params: 100M
+total params: 450M
+final logged loss: 1.226
+checkpoint size: about 1.3G
+```
+
+The smoke checkpoint reloads and predicts:
+
+```text
+input:
+  observation.images.wrist: (1, 3, 480, 640)
+  observation.images.front: (1, 3, 480, 640)
+  observation.state: (1, 7)
+  task: flip the bread in the pot
+
+output:
+  action chunk: (1, 50, 7)
+
+sample first_action:
+  [6.600660, -17.100586, -13.392845, 39.998962, -13.478397, -7.479803, -111.679703]
+```
+
+Overfit run command:
+
+```bash
+cd /root/work/drtc-Phi
+source .venv/bin/activate
+CUDA_VISIBLE_DEVICES=0 lerobot-train \
+  --policy.type=smolvla \
+  --policy.load_vlm_weights=true \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=Lisette1231/20260425_flipbreadtopot1 \
+  --dataset.video_backend=pyav \
+  --batch_size=8 \
+  --steps=1000 \
+  --eval_freq=0 \
+  --save_freq=500 \
+  --log_freq=20 \
+  --num_workers=4 \
+  --wandb.enable=false \
+  --output_dir=outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps
+```
+
+Overfit result:
+
+```text
+status: completed
+checkpoint 500:  outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps/checkpoints/000500/pretrained_model
+checkpoint 1000: outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps/checkpoints/001000/pretrained_model
+effective batch size: 8
+learnable params: 100M
+total params: 450M
+output dir size: about 2.5G
+loss:
+  step 20:   1.342
+  step 100:  0.461
+  step 300:  0.190
+  step 500:  0.127
+  step 780:  0.087
+  step 1000: 0.090
+```
+
+Final checkpoint reload/predict result:
+
+```text
+checkpoint:
+  outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps/checkpoints/001000/pretrained_model
+
+input features:
+  observation.state: (7,)
+  observation.images.wrist: (3, 480, 640)
+  observation.images.front: (3, 480, 640)
+
+output features:
+  action: (7,)
+
+single action chunk:
+  shape: (1, 50, 7)
+  dtype: float32
+  first-call latency on L20: 540.30 ms
+  min: -105.027985
+  max: 39.408401
+  mean: -17.334152
+  std: 30.411362
+
+sample first_action:
+  [-4.231995, -23.582581, -25.166920, 19.646269, -8.994103, -8.583467, -33.616550]
+```
+
+This checkpoint is a reBot-native DRTC candidate.
+It should still be treated as an overfit validation model, not a safe autonomous control policy.
+
+### Expanded Flip-Bread Dataset
+
+Additional datasets collected for the same action:
+
+```text
+https://huggingface.co/datasets/Lisette1231/20260425_flipbreadtopot2
+https://huggingface.co/datasets/Lisette1231/20260425_flipbreadtopot3
+https://huggingface.co/datasets/Lisette1231/20260425_flipbreadtopot4_newway
+https://huggingface.co/datasets/Lisette1231/20260425_flipbreadtopot5_newway
+```
+
+All five datasets share the same LeRobot schema:
+
+```text
+robot_type: seeed_b601_dm_follower
+fps: 30
+task: flip the bread in the pot
+observation.state: 7D
+action: 7D
+observation.images.front: video [480, 640, 3]
+observation.images.wrist: video [480, 640, 3]
+```
+
+Dataset sizes observed:
+
+```text
+Lisette1231/20260425_flipbreadtopot1:
+  episodes: 10
+  frames: 3711
+  storage: 233795126 bytes
+
+Lisette1231/20260425_flipbreadtopot2:
+  episodes: 10
+  frames: 3606
+  storage: 163336493 bytes
+
+Lisette1231/20260425_flipbreadtopot3:
+  episodes: 4
+  frames: 1410
+  storage: 68498309 bytes
+
+Lisette1231/20260425_flipbreadtopot4_newway:
+  episodes: 10
+  frames: 3946
+  storage: 199017392 bytes
+
+Lisette1231/20260425_flipbreadtopot5_newway:
+  episodes: 10
+  frames: 5753
+  storage: 277949778 bytes
+```
+
+Total:
+
+```text
+episodes: 44
+frames: 18426
+```
+
+Note:
+
+- The user described these as another 40 demonstrations.
+- The Hugging Face metadata currently shows 34 additional episodes beyond the first dataset because `flipbreadtopot3` has 4 episodes.
+- Current combined training baseline therefore uses 44 episodes total, not 50.
+
+LeRobot multi-dataset lists are not supported by the current `TrainPipelineConfig`.
+The working path is to merge the datasets locally first:
+
+```bash
+cat > /tmp/rebot_merge_44eps.json <<'JSON'
+{
+  "repo_id": "phi-media-lab/rebot_flipbreadtopot_20260425_44eps",
+  "root": null,
+  "new_repo_id": null,
+  "push_to_hub": false,
+  "operation": {
+    "type": "merge",
+    "repo_ids": [
+      "Lisette1231/20260425_flipbreadtopot1",
+      "Lisette1231/20260425_flipbreadtopot2",
+      "Lisette1231/20260425_flipbreadtopot3",
+      "Lisette1231/20260425_flipbreadtopot4_newway",
+      "Lisette1231/20260425_flipbreadtopot5_newway"
+    ]
+  }
+}
+JSON
+
+cd /root/work/drtc-Phi
+source .venv/bin/activate
+lerobot-edit-dataset --config_path /tmp/rebot_merge_44eps.json
+```
+
+Merge result:
+
+```text
+local repo id: phi-media-lab/rebot_flipbreadtopot_20260425_44eps
+local path: /root/.cache/huggingface/lerobot/phi-media-lab/rebot_flipbreadtopot_20260425_44eps
+episodes: 44
+frames: 18426
+size: about 899M
+```
+
+### reBot SmolVLA 44-Episode Training Result
+
+Training initialization:
+
+```text
+base checkpoint:
+  outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps/checkpoints/001000/pretrained_model
+
+dataset:
+  phi-media-lab/rebot_flipbreadtopot_20260425_44eps
+```
+
+Training command:
+
+```bash
+cd /root/work/drtc-Phi
+source .venv/bin/activate
+CUDA_VISIBLE_DEVICES=0 lerobot-train \
+  --policy.path=outputs/train/rebot_smolvla_flipbread_overfit_20260425_1000steps/checkpoints/001000/pretrained_model \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=phi-media-lab/rebot_flipbreadtopot_20260425_44eps \
+  --dataset.video_backend=pyav \
+  --batch_size=8 \
+  --steps=3000 \
+  --eval_freq=0 \
+  --save_freq=1000 \
+  --log_freq=50 \
+  --num_workers=4 \
+  --wandb.enable=false \
+  --output_dir=outputs/train/rebot_smolvla_flipbread_44eps_20260425_3000steps
+```
+
+Training result:
+
+```text
+status: completed
+dataset frames: 18426
+dataset episodes: 44
+effective batch size: 8
+learnable params: 100M
+total params: 450M
+checkpoints:
+  outputs/train/rebot_smolvla_flipbread_44eps_20260425_3000steps/checkpoints/001000/pretrained_model
+  outputs/train/rebot_smolvla_flipbread_44eps_20260425_3000steps/checkpoints/002000/pretrained_model
+  outputs/train/rebot_smolvla_flipbread_44eps_20260425_3000steps/checkpoints/003000/pretrained_model
+output dir size: about 3.7G
+```
+
+Loss curve:
+
+```text
+step 50:   0.148
+step 500:  0.111
+step 1000: 0.087
+step 1500: 0.070
+step 2000: 0.057
+step 2500: 0.049
+step 3000: 0.049
+```
+
+Final checkpoint reload/predict result:
+
+```text
+checkpoint:
+  outputs/train/rebot_smolvla_flipbread_44eps_20260425_3000steps/checkpoints/003000/pretrained_model
+
+Hugging Face:
+  https://huggingface.co/fbsh96/rebot_smolvla_flipbread_44eps_20260425_3000steps
+
+input features:
+  observation.state: (7,)
+  observation.images.wrist: (3, 480, 640)
+  observation.images.front: (3, 480, 640)
+
+output features:
+  action: (7,)
+
+output:
+  action chunk: (1, 50, 7)
+
+latency on L20:
+  first call: about 535 ms
+  steady calls: about 151-153 ms/chunk
+```
+
+Sample predictions from three merged-dataset frames:
+
+```text
+idx 0:
+  first_action:
+    [0.315390, -3.481686, -7.239395, 9.588888, 0.757010, -9.134871, -14.674559]
+
+idx 736:
+  first_action:
+    [-34.396896, -117.993027, -103.424217, 73.848999, 0.255486, -21.714380, -76.466095]
+
+idx 1471:
+  first_action:
+    [0.437017, -1.945919, -1.674629, 12.638105, -0.255466, -4.052654, 7.723423]
+```
+
+This is the best current reBot-native SmolVLA checkpoint for DRTC serving.
+It still requires logging-only validation and a safety/action adapter before any real actuator execution.
+
+### reBot ACT 44-Episode MI300X Training Result
+
+This run validates that the same 44-episode reBot LeRobot dataset can also train
+an ACT policy on the MI300X ROCm stack.
+
+Machine:
+
+```text
+host: phi-amd-work
+gpu: AMD Instinct MI300X VF
+runtime: PyTorch ROCm, exposed as cuda:0 by torch
+repo: /mnt/models_alehe/phi-fbsh/drtc-Phi
+```
+
+Dataset:
+
+```text
+repo id: phi-media-lab/rebot_flipbreadtopot_20260425_44eps
+episodes: 44
+frames: 18426
+state/action dims: 7D
+images:
+  observation.images.front: (3, 480, 640)
+  observation.images.wrist: (3, 480, 640)
+```
+
+Training command:
+
+```bash
+cd /mnt/models_alehe/phi-fbsh/drtc-Phi
+source /mnt/models_alehe/phi-fbsh/.venvs/drtc-mi300x/bin/activate
+HIP_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 lerobot-train \
+  --policy.type=act \
+  --policy.chunk_size=50 \
+  --policy.n_action_steps=50 \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=phi-media-lab/rebot_flipbreadtopot_20260425_44eps \
+  --dataset.video_backend=pyav \
+  --batch_size=16 \
+  --steps=10000 \
+  --eval_freq=0 \
+  --save_freq=2500 \
+  --log_freq=100 \
+  --num_workers=4 \
+  --wandb.enable=false \
+  --output_dir=outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps
+```
+
+Training result:
+
+```text
+status: completed
+effective batch size: 16
+learnable params: 52M
+checkpoints:
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/002500/pretrained_model
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/005000/pretrained_model
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/007500/pretrained_model
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/010000/pretrained_model
+```
+
+Loss curve:
+
+```text
+step 100:   9.431
+step 1000:  1.672
+step 2500:  0.650
+step 5000:  0.241
+step 7500:  0.157
+step 10000: 0.124
+```
+
+Final checkpoint reload/predict result:
+
+```text
+checkpoint:
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/010000/pretrained_model
+
+input features:
+  observation.state: (7,)
+  observation.images.wrist: (3, 480, 640)
+  observation.images.front: (3, 480, 640)
+
+output features:
+  action: (7,)
+
+output:
+  predict_action_chunk: (1, 50, 7)
+  select_action: (1, 7)
+
+latency on MI300X:
+  first chunk call: about 6654 ms
+  steady chunk calls: about 7.86 ms/chunk, about 127 Hz
+  select_action queue consumption: about 0.28 ms/action
+```
+
+DRTC loopback validation:
+
+```text
+server: PolicyServerDrtc on 127.0.0.1
+client: synthetic reBot observation sender on the same MI300X host
+policy type: act
+checkpoint:
+  outputs/train/rebot_act_flipbread_44eps_mi300x_b16_10000steps/checkpoints/010000/pretrained_model
+
+synthetic observation:
+  observation.state: 7D zeros
+  observation.images.front: 480x640x3 uint8 zeros
+  observation.images.wrist: 480x640x3 uint8 zeros
+  task: "flip the bread in the pot"
+
+result:
+  policy setup with 1 warmup pass: about 7.64 s
+  warmup pass: about 6719 ms
+  loopback roundtrip after warmup: about 72 ms
+  server observation-to-action-send: about 48.9 ms
+  returned action chunk: (50, 7)
+```
+
+Implementation note:
+
+The first DRTC loopback exposed a warmup bug in `policy_server_drtc.py`: the
+dummy warmup observation assumed a 6D state fallback when `lerobot_features`
+used the normal dataset-feature dict form. For reBot/B601 this mismatched the
+7D normalizer. The warmup state dimension now uses `observation.state.shape[0]`
+or the length of `observation.state.names` before falling back to 6.
+
+Interpretation:
+
+- The ACT checkpoint is reBot-native and matches the B601 7D action/state schema.
+- The steady chunk inference path is much faster than the current SmolVLA checkpoint on L20, but this is a different model class and should not be interpreted as a VLA quality comparison.
+- Like the SmolVLA checkpoint, this remains an offline imitation checkpoint. It still needs logging-only replay, action scaling/safety limits, and hardware dry-run validation before real actuator execution.
 
 ### SmolVLA Checkpoint
 
@@ -374,6 +1001,18 @@ v4l2-ctl --list-devices
 The public checkpoint emits SO101-style 6D actions.
 Do not send these directly to reBot actuators without an adapter.
 
+The collected reBot dataset defines the native B601 command/state schema as 7D:
+
+```text
+shoulder_pan.pos
+shoulder_lift.pos
+elbow_flex.pos
+wrist_flex.pos
+wrist_yaw.pos
+wrist_roll.pos
+gripper.pos
+```
+
 Required before real movement:
 
 - Identify reBot command interface.
@@ -381,7 +1020,8 @@ Required before real movement:
 - Define safe joint limits.
 - Define speed/acceleration limits.
 - Define emergency stop.
-- Map SmolVLA `action[6]` to reBot command space or disable direct execution and run logging-only mode.
+- For SO101 checkpoint validation, keep actions logging-only.
+- For reBot policy validation, treat model output as 7D B601 commands and still pass through clipping, rate limiting, and joint-limit checks.
 
 ### reBot-Specific Policy
 
@@ -391,9 +1031,10 @@ It can validate the system path, but not task competence.
 Paths to task competence:
 
 1. Use rule-based / IK controller for the demo-critical path.
-2. Collect reBot data in LeRobot format.
-3. Fine-tune SmolVLA or train ACT/Diffusion on reBot data.
-4. Use DRTC to serve the trained policy remotely.
+2. Use `Lisette1231/20260425_flipbreadtopot1` as the first reBot-native training dataset.
+3. Fine-tune SmolVLA or train ACT/Diffusion on the 7D B601 data.
+4. Validate overfit inference on Ali L20.
+5. Use DRTC to serve the trained reBot policy remotely.
 
 ### Network Exposure
 
@@ -479,13 +1120,13 @@ If serial devices do not appear:
 Build a reComputer client that does not move the robot:
 
 ```text
-read camera1
-read camera2
-read joint/state if available
-construct observation.state[6]
-construct observation.images.camera1/camera2
+read front camera
+read wrist camera
+read 7D joint/state if available
+construct observation.state[7]
+construct observation.images.front/wrist
 send to DRTC server
-receive 50 x 6 action chunk
+receive action chunk
 log action chunk only
 ```
 
