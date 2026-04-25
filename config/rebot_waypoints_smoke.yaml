@@ -1,0 +1,10 @@
+waypoints:
+  - name: zero_reachable_lift
+    xyz: [0.25, 0.0, 0.25]
+    rpy: [0.0, 0.0, 0.0]
+  - name: front_right_hover
+    xyz: [0.30, 0.10, 0.25]
+    rpy: [0.0, 0.0, 0.0]
+  - name: known_bad_left_low_probe
+    xyz: [0.20, -0.10, 0.20]
+    rpy: [0.0, 0.0, 0.0]

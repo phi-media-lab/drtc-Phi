@@ -1,0 +1,29 @@
+{
+  "sac_checkpoint": {
+    "episodes": 48,
+    "success_count": 2,
+    "success_rate": 0.041666666666666664,
+    "mean_steps": 78.5,
+    "mean_final_distance_m": 0.1462985390543107,
+    "mean_min_distance_m": 0.06070443585193911,
+    "mean_total_reward": -8.975121082628727
+  },
+  "ik_baseline": {
+    "episodes": 48,
+    "success_count": 44,
+    "success_rate": 0.9166666666666666,
+    "mean_steps": 22.5625,
+    "mean_final_distance_m": 0.014765116172085835,
+    "mean_min_distance_m": 0.014765116172085835,
+    "mean_total_reward": -0.1042005206852266
+  },
+  "random_baseline": {
+    "episodes": 48,
+    "success_count": 2,
+    "success_rate": 0.041666666666666664,
+    "mean_steps": 77.625,
+    "mean_final_distance_m": 0.14536865375809202,
+    "mean_min_distance_m": 0.058475221010095925,
+    "mean_total_reward": -9.147688788218355
+  }
+}

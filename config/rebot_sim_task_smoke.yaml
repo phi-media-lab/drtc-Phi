@@ -1,0 +1,23 @@
+task:
+  name: reach_front_right_hover
+  max_steps: 80
+  dt: 0.0666666667
+  success_distance_m: 0.015
+  target_xyz: [0.30, 0.10, 0.25]
+
+initial_state:
+  q_deg: [0, 0, 0, 0, 0, 0]
+  gripper: 0.0
+
+action_adapter:
+  joint_delta_scale_rad: 0.035
+  gripper_delta_scale: 0.05
+  max_abs_joint_rad: 2.8
+  min_gripper: 0.0
+  max_gripper: 1.0
+
+policy:
+  type: mock_proportional_ik
+  ik_target_xyz: [0.30, 0.10, 0.25]
+  action_clip: 1.0
+  random_seed: 0

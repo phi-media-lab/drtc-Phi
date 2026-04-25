@@ -1,0 +1,28 @@
+task:
+  name: drtc_chunk_to_rebot_kinematic_sim
+  max_steps: 50
+  dt: 0.0666666667
+  success_distance_m: 0.015
+  target_xyz: [0.30, 0.10, 0.25]
+
+initial_state:
+  q_deg: [0, 0, 0, 0, 0, 0]
+  gripper: 0.0
+
+action_adapter:
+  joint_delta_scale_rad: 0.01
+  gripper_delta_scale: 0.02
+  max_abs_joint_rad: 2.8
+  min_gripper: 0.0
+  max_gripper: 1.0
+
+policy:
+  type: drtc
+  server_address: 165.245.129.215:18201
+  skip_policy_setup: true
+  state_dim: 8
+  image_size: [224, 224]
+  actions_per_chunk: 50
+  action_clip: 1.0
+  wait_timeout_s: 90
+  task: pick up the orange cube
