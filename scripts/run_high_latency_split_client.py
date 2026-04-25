@@ -66,25 +66,31 @@ def _make_image(width: int, height: int, mode: str, rng: np.random.Generator) ->
     raise ValueError(f"Unsupported image mode: {mode}")
 
 
-def _lerobot_features(state_dim: int, image_size: tuple[int, int]) -> dict[str, dict[str, Any]]:
+def _parse_image_feature_names(value: str) -> list[str]:
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    if not names:
+        raise ValueError("--image-feature-names must include at least one image key")
+    return names
+
+
+def _lerobot_features(
+    state_dim: int, image_size: tuple[int, int], image_feature_names: list[str]
+) -> dict[str, dict[str, Any]]:
     width, height = image_size
-    return {
+    features = {
         "observation.state": {
             "dtype": "float32",
             "shape": (state_dim,),
             "names": [f"state_{i}" for i in range(state_dim)],
-        },
-        "observation.images.image": {
-            "dtype": "image",
-            "shape": (height, width, 3),
-            "names": ["height", "width", "channels"],
-        },
-        "observation.images.wrist_image": {
-            "dtype": "image",
-            "shape": (height, width, 3),
-            "names": ["height", "width", "channels"],
-        },
+        }
     }
+    for image_name in image_feature_names:
+        features[f"observation.images.{image_name}"] = {
+            "dtype": "image",
+            "shape": (height, width, 3),
+            "names": ["height", "width", "channels"],
+        }
+    return features
 
 
 def _make_observation(
@@ -94,6 +100,7 @@ def _make_observation(
     state_dim: int,
     image_size: tuple[int, int],
     image_mode: str,
+    image_feature_names: list[str],
     task: str,
     jpeg_quality: int | None,
     rng: np.random.Generator,
@@ -101,13 +108,13 @@ def _make_observation(
 ) -> tuple[TimedObservation, int, int | None, int]:
     width, height = image_size
     observation: dict[str, Any] = {f"state_{i}": 0.0 for i in range(state_dim)}
-    observation["image"] = _make_image(width, height, image_mode, rng)
-    observation["wrist_image"] = _make_image(width, height, image_mode, rng)
+    for image_name in image_feature_names:
+        observation[image_name] = _make_image(width, height, image_mode, rng)
     observation["task"] = task
     if rtc_meta is not None:
         observation["__rtc__"] = rtc_meta
 
-    raw_image_bytes = observation["image"].nbytes + observation["wrist_image"].nbytes
+    raw_image_bytes = sum(observation[image_name].nbytes for image_name in image_feature_names)
     encoded_image_bytes = None
     if jpeg_quality is not None:
         observation, stats = encode_images_for_transport(observation, jpeg_quality=jpeg_quality)
@@ -161,7 +168,7 @@ def _setup_policy(args: argparse.Namespace, stub: services_pb2_grpc.AsyncInferen
     policy = RemotePolicyConfig(
         policy_type=args.policy_type,
         pretrained_name_or_path=args.pretrained_name_or_path,
-        lerobot_features=_lerobot_features(args.state_dim, args.image_size),
+        lerobot_features=_lerobot_features(args.state_dim, args.image_size, args.image_feature_names),
         actions_per_chunk=args.actions_per_chunk,
         device=args.device,
         rtc_enabled=args.rtc_enabled,
@@ -235,6 +242,12 @@ def main() -> None:
     parser.add_argument("--state-dim", type=int, default=8)
     parser.add_argument("--image-size", type=_parse_size, default=(224, 224), metavar="WIDTHxHEIGHT")
     parser.add_argument("--image-mode", choices=["zeros", "random", "gradient"], default="zeros")
+    parser.add_argument(
+        "--image-feature-names",
+        type=_parse_image_feature_names,
+        default=_parse_image_feature_names("image,wrist_image"),
+        help="Comma-separated raw image keys mapped to observation.images.<key>.",
+    )
     parser.add_argument("--jpeg-quality", type=int, default=40)
     parser.add_argument("--task", default="pick up the orange cube")
     parser.add_argument("--num-flow-matching-steps", type=int, default=8)
@@ -293,6 +306,7 @@ def main() -> None:
             state_dim=args.state_dim,
             image_size=args.image_size,
             image_mode=args.image_mode,
+            image_feature_names=args.image_feature_names,
             task=args.task,
             jpeg_quality=args.jpeg_quality,
             rng=rng,
@@ -374,6 +388,7 @@ def main() -> None:
                 state_dim=args.state_dim,
                 image_size=args.image_size,
                 image_mode=args.image_mode,
+                image_feature_names=args.image_feature_names,
                 task=args.task,
                 jpeg_quality=args.jpeg_quality,
                 rng=rng,
