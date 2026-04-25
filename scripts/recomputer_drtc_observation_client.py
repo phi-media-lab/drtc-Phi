@@ -10,6 +10,8 @@ and validates that a remote DRTC server returns dense action chunks.
 from __future__ import annotations
 
 import argparse
+import csv
+import math
 import pickle
 import queue
 import sys
@@ -109,6 +111,24 @@ def _decode_dense(dense: services_pb2.ActionsDense) -> np.ndarray:
     return arr.reshape(int(dense.num_actions), int(dense.action_dim))
 
 
+def _latency_steps(latency_ms: float, fps: float) -> int:
+    return max(1, int(math.ceil((latency_ms / 1000.0) * fps)))
+
+
+def _adapt_action(
+    action: np.ndarray,
+    prev_action: np.ndarray | None,
+    *,
+    clip_abs: float,
+    max_delta: float,
+) -> np.ndarray:
+    adapted = np.clip(action.astype(np.float32), -clip_abs, clip_abs)
+    if prev_action is not None:
+        delta = np.clip(adapted - prev_action, -max_delta, max_delta)
+        adapted = prev_action + delta
+    return adapted.astype(np.float32)
+
+
 def _jpeg_encode_image(rgb: np.ndarray, quality: int) -> bytes:
     import io
 
@@ -126,6 +146,36 @@ def _stream_actions(stub: services_pb2_grpc.AsyncInferenceStub, out: queue.Queue
     except grpc.RpcError as exc:
         if not stop.is_set():
             out.put(exc)
+
+
+def _drain_actions(
+    action_q: queue.Queue,
+    schedule: dict[int, np.ndarray],
+    *,
+    latest_rtt_ms: float | None,
+) -> tuple[int, float | None, int | None, int | None, int | None, int | None]:
+    received = 0
+    last_source_step = None
+    last_chunk_start = None
+    last_num_actions = None
+    last_action_dim = None
+    while True:
+        try:
+            item = action_q.get_nowait()
+        except queue.Empty:
+            break
+        if isinstance(item, grpc.RpcError):
+            raise item
+        actions = _decode_dense(item)
+        for i, action in enumerate(actions):
+            schedule[int(item.chunk_start_step) + i] = action
+        received += 1
+        latest_rtt_ms = max(0.0, (time.time() - float(item.timestamp)) * 1000.0)
+        last_source_step = int(item.source_control_step)
+        last_chunk_start = int(item.chunk_start_step)
+        last_num_actions = int(item.num_actions)
+        last_action_dim = int(item.action_dim)
+    return received, latest_rtt_ms, last_source_step, last_chunk_start, last_num_actions, last_action_dim
 
 
 def _features(state_dim: int, width: int, height: int, image_names: list[str]) -> dict[str, dict[str, Any]]:
@@ -190,6 +240,15 @@ def main() -> None:
     parser.add_argument("--task", default="Pick up the orange cube and place it in the target area.")
     parser.add_argument("--setup-policy", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=30.0)
+    parser.add_argument("--run-loop", action="store_true", help="Run a simulated 15Hz scheduler loop.")
+    parser.add_argument("--duration-s", type=float, default=20.0)
+    parser.add_argument("--fps", type=float, default=15.0)
+    parser.add_argument("--s-min", type=int, default=25)
+    parser.add_argument("--epsilon", type=int, default=2)
+    parser.add_argument("--initial-latency-ms", type=float, default=50.0)
+    parser.add_argument("--clip-abs", type=float, default=1.0)
+    parser.add_argument("--max-delta", type=float, default=0.05)
+    parser.add_argument("--output", default="")
     args = parser.parse_args()
 
     width, height = [int(x) for x in args.image_size.lower().split("x", 1)]
@@ -224,6 +283,12 @@ def main() -> None:
     stop = threading.Event()
     thread = threading.Thread(target=_stream_actions, args=(stub, action_q, stop), daemon=True)
     thread.start()
+
+    if args.run_loop:
+        _run_scheduler_loop(args, stub, action_q, width=width, height=height, image_names=image_names)
+        stop.set()
+        channel.close()
+        return
 
     obs = _make_observation(
         control_step=int(time.time() * 1000),
@@ -267,6 +332,142 @@ def main() -> None:
     finally:
         stop.set()
         channel.close()
+
+
+def _run_scheduler_loop(
+    args: argparse.Namespace,
+    stub: services_pb2_grpc.AsyncInferenceStub,
+    action_q: queue.Queue,
+    *,
+    width: int,
+    height: int,
+    image_names: list[str],
+) -> None:
+    schedule: dict[int, np.ndarray] = {}
+    latest_rtt_ms: float | None = args.initial_latency_ms
+    rng_control_step = int(time.time() * 1000)
+    control_step = rng_control_step
+    action_step = 0
+    period_s = 1.0 / args.fps
+    cooldown = 0
+    trigger_threshold = args.actions_per_chunk - args.s_min
+    next_tick = time.monotonic()
+    end_time = time.monotonic() + args.duration_s
+    rows: list[dict[str, Any]] = []
+    stalls = 0
+    sent_observations = 0
+    chunks_received = 0
+    prev_adapted: np.ndarray | None = None
+
+    def _send(action_start_step: int) -> tuple[float, int]:
+        nonlocal control_step, sent_observations
+        obs = _make_observation(
+            control_step=control_step,
+            action_step=action_start_step,
+            state_dim=args.state_dim,
+            width=width,
+            height=height,
+            image_names=image_names,
+            task=args.task,
+            jpeg_quality=args.jpeg_quality,
+        )
+        payload = pickle.dumps(obs)
+        t0 = time.perf_counter()
+        stub.SendObservations(_send_bytes_in_chunks(payload, services_pb2.Observation))
+        send_ms = (time.perf_counter() - t0) * 1000
+        control_step += 1
+        sent_observations += 1
+        return send_ms, len(payload)
+
+    last_send_ms, last_payload_bytes = _send(action_step)
+    print(
+        f"loop_start fps={args.fps:g} duration_s={args.duration_s:g} "
+        f"H={args.actions_per_chunk} s_min={args.s_min} jpeg_quality={args.jpeg_quality}"
+    )
+
+    while time.monotonic() < end_time:
+        now = time.monotonic()
+        if now < next_tick:
+            time.sleep(next_tick - now)
+        tick_wall = time.time()
+
+        received, latest_rtt_ms, last_source_step, last_chunk_start, last_num_actions, last_action_dim = _drain_actions(
+            action_q,
+            schedule,
+            latest_rtt_ms=latest_rtt_ms,
+        )
+        chunks_received += received
+
+        raw_action = schedule.pop(action_step, None)
+        action_received = raw_action is not None
+        if not action_received:
+            stalls += 1
+            raw_action = np.zeros(6, dtype=np.float32) if prev_adapted is None else prev_adapted
+
+        adapted = _adapt_action(
+            raw_action,
+            prev_adapted,
+            clip_abs=args.clip_abs,
+            max_delta=args.max_delta,
+        )
+        prev_adapted = adapted
+        raw_norm = float(np.linalg.norm(raw_action))
+        adapted_norm = float(np.linalg.norm(adapted))
+
+        action_step += 1
+        latency_steps = _latency_steps(latest_rtt_ms or args.initial_latency_ms, args.fps)
+        schedule_size = sum(1 for step in schedule if step >= action_step)
+        obs_triggered = False
+        if schedule_size <= trigger_threshold and cooldown <= 0:
+            last_send_ms, last_payload_bytes = _send(action_step)
+            obs_triggered = True
+            cooldown = latency_steps + args.epsilon
+        else:
+            cooldown = max(0, cooldown - 1)
+
+        rows.append(
+            {
+                "wall_time": f"{tick_wall:.6f}",
+                "action_step": action_step,
+                "schedule_size": schedule_size,
+                "stall": int(not action_received),
+                "obs_triggered": int(obs_triggered),
+                "chunks_received_total": chunks_received,
+                "chunks_received_tick": received,
+                "latency_estimate_ms": f"{(latest_rtt_ms or 0.0):.3f}",
+                "latency_steps": latency_steps,
+                "cooldown": cooldown,
+                "last_send_ms": f"{last_send_ms:.3f}",
+                "last_payload_bytes": last_payload_bytes,
+                "last_source_step": last_source_step if last_source_step is not None else "",
+                "last_chunk_start": last_chunk_start if last_chunk_start is not None else "",
+                "last_num_actions": last_num_actions if last_num_actions is not None else "",
+                "last_action_dim": last_action_dim if last_action_dim is not None else "",
+                "raw_action_norm": f"{raw_norm:.6f}",
+                "adapted_action_norm": f"{adapted_norm:.6f}",
+                "adapted_action": " ".join(f"{x:.6f}" for x in adapted.tolist()),
+            }
+        )
+
+        next_tick += period_s
+
+    if args.output:
+        with open(args.output, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else [])
+            writer.writeheader()
+            writer.writerows(rows)
+
+    print("summary")
+    print(f"  output={args.output or '<none>'}")
+    print(f"  ticks={len(rows)} stalls={stalls} starvation_ratio={(stalls / len(rows)) if rows else 0:.4f}")
+    print(f"  observations_sent={sent_observations} chunks_received={chunks_received}")
+    if rows:
+        schedule_sizes = [int(row["schedule_size"]) for row in rows]
+        send_times = [float(row["last_send_ms"]) for row in rows]
+        latencies = [float(row["latency_estimate_ms"]) for row in rows]
+        print(f"  schedule_min={min(schedule_sizes)} schedule_max={max(schedule_sizes)}")
+        print(f"  latency_ms_min={min(latencies):.1f} median={float(np.median(latencies)):.1f} max={max(latencies):.1f}")
+        print(f"  send_ms_min={min(send_times):.1f} median={float(np.median(send_times)):.1f} max={max(send_times):.1f}")
 
 
 if __name__ == "__main__":
