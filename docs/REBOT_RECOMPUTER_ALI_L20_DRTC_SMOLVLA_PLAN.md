@@ -238,6 +238,86 @@ Important fix from validation:
 --image-feature-names camera1,camera2
 ```
 
+### reComputer Direct Public DRTC Test
+
+After opening Aliyun inbound TCP `18201`, the reComputer can reach the L20 policy server directly,
+without SSH tunneling:
+
+```text
+reComputer -> 47.106.21.198:18201 -> Ali L20 DRTC/SmolVLA -> reComputer
+```
+
+Lightweight client location on reComputer:
+
+```text
+~/drtc-lite/scripts/recomputer_drtc_observation_client.py
+~/venvs/rebot-drtc-client
+```
+
+Direct validation command:
+
+```bash
+cd ~/drtc-lite
+PYTHONPATH=$PWD ~/venvs/rebot-drtc-client/bin/python \
+  scripts/recomputer_drtc_observation_client.py \
+  --server-address 47.106.21.198:18201 \
+  --setup-policy \
+  --timeout-s 60
+```
+
+Observed result with raw synthetic dual `800x600` images:
+
+```text
+ready_ms=67.7
+policy_setup_ms=12786.4
+observation_sent_ms=1409.6
+payload_bytes=2880601
+chunk_received num_actions=50 action_dim=6
+actions shape=(50, 6)
+min=-46.737064 max=62.399841 mean=6.024907 std=32.959862
+first_action=[-11.614491, 4.149872, 32.659039, 27.594967, -4.467266, -0.082888]
+```
+
+Interpretation:
+
+- Direct public DRTC access from reComputer to Ali L20 is working.
+- The `2.88MB` raw image payload is too slow for the control loop.
+- Use JPEG compression for camera payloads before moving to scheduler tests.
+
+Compressed validation command:
+
+```bash
+cd ~/drtc-lite
+PYTHONPATH=$PWD ~/venvs/rebot-drtc-client/bin/python \
+  scripts/recomputer_drtc_observation_client.py \
+  --server-address 47.106.21.198:18201 \
+  --setup-policy \
+  --jpeg-quality 40 \
+  --timeout-s 60
+```
+
+Observed result with JPEG q40 synthetic dual `800x600` zero images:
+
+```text
+ready_ms=81.9
+policy_setup_ms=12726.0
+observation_sent_ms=23.4
+payload_bytes=16936
+chunk_received num_actions=50 action_dim=6
+actions shape=(50, 6)
+min=-45.761475 max=61.118378 mean=6.487365 std=32.542755
+first_action=[-10.112844, 3.084328, 31.675591, 29.949953, -3.637812, 0.196829]
+```
+
+JPEG q40 impact:
+
+```text
+raw payload:  2,880,601 bytes, observation_sent_ms=1409.6
+JPEG payload:    16,936 bytes, observation_sent_ms=23.4
+```
+
+This is the transport mode to use for the next simulated scheduler and camera-only client tests.
+
 ## Why This Architecture
 
 ### Why reComputer Should Be Client-Only
@@ -508,4 +588,3 @@ reComputer robot client + Ali L20 DRTC SmolVLA server
 
 Use SmolVLA for remote VLA/chunking validation.
 Use IK/scripted/LeRobot-native reBot policy for safe task execution until reBot-specific training data exists.
-
